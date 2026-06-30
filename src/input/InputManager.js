@@ -5,6 +5,7 @@
 import { KeyboardSource } from './KeyboardSource.js';
 import { TouchSource } from './TouchSource.js';
 import { TiltSource } from './TiltSource.js';
+import { CONFIG } from '../data/config.js';
 
 export class InputManager {
   constructor(game) {
@@ -52,9 +53,12 @@ export class InputManager {
 
     const throttle = Math.max(this.keyboard.throttle, this.touch.throttle);
 
-    this.state.steerX = clamp(steer, -1, 1);
-    this.state.pitchY = clamp(pitch, -1, 1);
-    this.state.throttle = clamp(throttle, 0, 1);
+    // Framerate-independent smoothing so every control method (tilt/touch/keys)
+    // eases toward its target instead of snapping — the main anti-jank lever.
+    const ease = (cur, tgt, tau) => cur + (tgt - cur) * (1 - Math.exp(-dt / Math.max(0.001, tau)));
+    this.state.steerX = ease(this.state.steerX, clamp(steer, -1, 1), CONFIG.inputSmoothSteer);
+    this.state.pitchY = ease(this.state.pitchY, clamp(pitch, -1, 1), CONFIG.inputSmoothPitch);
+    this.state.throttle = ease(this.state.throttle, clamp(throttle, 0, 1), CONFIG.inputSmoothThrottle);
   }
 }
 

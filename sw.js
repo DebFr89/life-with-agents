@@ -1,6 +1,6 @@
 // Cache-first app shell. Bump CACHE_VERSION on every release so updates land
 // (there is no build step / content hashing).
-const CACHE_VERSION = 'skycareer-v1';
+const CACHE_VERSION = 'skycareer-v2';
 
 const SHELL = [
   './', './index.html', './manifest.webmanifest',

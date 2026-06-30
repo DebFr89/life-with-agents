@@ -56,6 +56,15 @@ export class FlightModel {
       this.airborne = true;
     }
     this.vSpeed += (targetVS - this.vSpeed) * Math.min(1, CONFIG.pitchResponse * dt);
+
+    // Ground-effect cushion: near the runway, ease an aggressive sink toward a
+    // gentler rate so touchdowns (and lift-off) feel smooth, not abrupt. Only
+    // engages on steep descents, so gentle approaches are still rewarded.
+    if (this.airborne && this.altitude < CONFIG.flareAlt && this.vSpeed < -CONFIG.flareSinkCap) {
+      const cushion = 1 - this.altitude / CONFIG.flareAlt;   // 0 high → 1 at ground
+      this.vSpeed += (-CONFIG.flareSinkCap - this.vSpeed) * cushion * Math.min(1, dt * 6);
+    }
+
     this.altitude += this.vSpeed * dt;
 
     if (this.altitude <= 0) {

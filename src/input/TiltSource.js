@@ -1,8 +1,8 @@
 // Device-orientation (gyro) steering. iOS 13+ needs requestPermission() from a
 // user gesture AND a secure context (HTTPS/localhost). Falls back gracefully.
-const RANGE = 32;        // degrees of tilt for full deflection
-const DEADZONE = 2.5;    // degrees ignored around the calibrated zero
-const SMOOTH = 0.2;      // low-pass factor
+const RANGE = 38;        // degrees of tilt for full deflection (higher = less sensitive)
+const DEADZONE = 4;      // degrees ignored around the calibrated zero (kills jitter)
+const SMOOTH = 0.14;     // low-pass factor (lower = more stable)
 
 export class TiltSource {
   constructor(manager) {

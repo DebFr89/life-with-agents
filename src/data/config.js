@@ -20,9 +20,20 @@ export const CONFIG = {
   groundAlt: 0,            // touchdown altitude
   altMax: 220,             // ceiling of the altitude band
   lateralMax: 130,         // how far left/right the plane can stray from centreline
-  bankToTurn: 0.85,        // sin(bank) * speed * this = lateral velocity
-  pitchResponse: 2.4,      // how quickly vertical speed eases toward target
+  bankToTurn: 0.72,        // sin(bank) * speed * this = lateral velocity
+  pitchResponse: 1.5,      // how quickly vertical speed eases toward target (lower = gentler)
   gravityWhenStalled: 28,  // sink rate (alt/sec) when out of fuel / stalled
+
+  // --- Stabilization / feel (smoothing time-constants, in seconds) ---
+  inputSmoothSteer: 0.16,  // eases raw steer input → smoother, less janky turns
+  inputSmoothPitch: 0.20,  // eases raw pitch input → gentler climb/descent
+  inputSmoothThrottle: 0.14,
+  camSmoothPos: 0.10,      // camera lateral follow
+  camSmoothAlt: 0.13,      // camera altitude follow (smooths takeoff/landing)
+  camSmoothPitch: 0.18,    // camera horizon-pitch follow (no snapping)
+  camSmoothBank: 0.11,     // camera/world roll follow
+  flareAlt: 20,            // altitude below which a ground-effect cushion softens sink
+  flareSinkCap: 15,        // steep sink eases toward this rate near the ground
 
   // --- Phases (fractions of route distance) ---
   takeoffAlt: 60,          // climb above this to leave the takeoff roll

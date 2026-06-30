@@ -41,6 +41,7 @@ export class FlightScene extends Scene {
     this.message = null;
     this.ending = null;          // { gradeKey, t } once the flight is over
     this.approachStart = this.D * CONFIG.approachFrac;
+    this.cam = { x: 0, alt: 0, pitch: 0, bank: 0 };   // smoothed view, eases behind physics
 
     this.buttons = [new Button({
       x: canvas.width - 86 * s, y: 50 * s, w: 70 * s, h: 28 * s, label: 'Abort', kind: 'ghost',
@@ -63,6 +64,7 @@ export class FlightScene extends Scene {
 
     if (this.ending) {
       this.ending.t -= dt;
+      this._updateCamera(dt);
       this.fx.update(dt);
       if (this.ending.t <= 0) this._goResults();
       return;
@@ -84,7 +86,19 @@ export class FlightScene extends Scene {
     this._crossings(prev, this.planeDistance);
     this._phases();
     this._engineAndTrail(input);
+    this._updateCamera(dt);
     this.fx.update(dt);
+  }
+
+  // Ease the rendered camera behind the raw physics so the horizon, roll and
+  // altitude never snap — the core of the "stabilized" feel.
+  _updateCamera(dt) {
+    const C = CONFIG;
+    const ease = (cur, tgt, tau) => cur + (tgt - cur) * (1 - Math.exp(-dt / Math.max(0.001, tau)));
+    this.cam.x = ease(this.cam.x, this.model.x, C.camSmoothPos);
+    this.cam.alt = ease(this.cam.alt, this.model.altitude, C.camSmoothAlt);
+    this.cam.pitch = ease(this.cam.pitch, this.model.pitchNorm, C.camSmoothPitch);
+    this.cam.bank = ease(this.cam.bank, this.model.bank, C.camSmoothBank);
   }
 
   _crossings(prev, now) {
@@ -178,12 +192,12 @@ export class FlightScene extends Scene {
     const { canvas } = this.game;
     const s = uiScale(canvas);
 
-    // camera from flight state
+    // smoothed camera (eases behind physics — see _updateCamera)
     this.p3d.update(canvas, {
-      x: this.model.x,
-      alt: this.model.altitude,
-      pitch: this.model.pitchNorm,
-      bank: this.model.bank,
+      x: this.cam.x,
+      alt: this.cam.alt,
+      pitch: this.cam.pitch,
+      bank: this.cam.bank,
     });
 
     // screen shake
@@ -194,6 +208,7 @@ export class FlightScene extends Scene {
 
     // refresh entity z then draw
     for (const e of this.world.entities) e.z = e.dist - this.planeDistance;
+    this._drawPath(ctx);
     this._drawRunway(ctx);
     drawEntities(ctx, this.p3d, this.world.entities);
 
@@ -201,7 +216,7 @@ export class FlightScene extends Scene {
     if (!(this.ending && this.ending.gradeKey === 'CRASH')) {
       const px = canvas.width / 2;
       const py = canvas.height * 0.72 + Math.sin(this.bob * 3) * 3 * s;
-      drawPlane(ctx, px, py, 40 * s, this.model.bank, this.ac);
+      drawPlane(ctx, px, py, 40 * s, this.cam.bank, this.ac);
     }
 
     this.fx.draw(ctx);
@@ -212,37 +227,103 @@ export class FlightScene extends Scene {
     for (const b of this.buttons) b.render(ctx, s);
   }
 
-  _drawRunway(ctx) {
-    const zThreshold = this.D - this.planeDistance;
-    if (zThreshold > 620 || this.phase === 'takeoff' && !this._leftGround) {
-      // also show a departure runway at the start
-      if (this.planeDistance < 300) this._runwayQuad(ctx, -this.planeDistance, 600);
-      return;
+  // Flight-path indicator: flowing chevrons on the ground leading from beneath
+  // the aircraft toward the next gate (cruise) or the runway centreline (approach).
+  _drawPath(ctx) {
+    if (this.ending) return;
+    let targetX = 0;
+    if (this.phase === 'takeoff' || this.phase === 'cruise') {
+      const g = this.world.gates.find(x => !x.scored);
+      targetX = g ? g.x : 0;
     }
-    this._runwayQuad(ctx, zThreshold, 700);
+    const N = 9, near = 55, far = 440, step = (far - near) / N;
+    const flow = this.odometer % step;               // chevrons stream toward the camera
+    this.p3d.beginWorld(ctx);
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    for (let i = 0; i < N; i++) {
+      const z = near + i * step - flow;
+      if (z < 10) continue;
+      const t = clamp((z - near) / (far - near), 0, 1);
+      const x = lerp(this.cam.x, targetX, t);
+      const p = this.p3d.project(x, 1, z);
+      const w = 20 * p.scale, h = 13 * p.scale;
+      ctx.strokeStyle = `rgba(120,220,255,${clamp(1 - t, 0.12, 0.85)})`;
+      ctx.lineWidth = Math.max(1.5, 3.2 * p.scale);
+      ctx.beginPath();
+      ctx.moveTo(p.sx - w, p.sy + h);
+      ctx.lineTo(p.sx, p.sy - h * 0.4);
+      ctx.lineTo(p.sx + w, p.sy + h);
+      ctx.stroke();
+    }
+    this.p3d.endWorld(ctx);
   }
 
-  _runwayQuad(ctx, zNear, len) {
-    const hw = CONFIG.gateHalfWidth * 1.4;
-    const nearL = this.p3d.project(-hw, 0, Math.max(0.1, zNear));
-    const nearR = this.p3d.project(hw, 0, Math.max(0.1, zNear));
-    const farL = this.p3d.project(-hw, 0, zNear + len);
-    const farR = this.p3d.project(hw, 0, zNear + len);
-    this.p3d.beginWorld(ctx);
-    ctx.fillStyle = '#3a3f47';
+  _drawRunway(ctx) {
+    const zThr = this.D - this.planeDistance;
+    if (this._leftGround && zThr < CONFIG.viewDistance * 0.98) {
+      this._runway(ctx, zThr, 760, true);            // destination runway + approach lights
+    } else if (!this._leftGround && this.planeDistance < 440) {
+      this._runway(ctx, -this.planeDistance, 600, false);   // departure strip
+    }
+  }
+
+  _runway(ctx, zThreshold, len, withApproach) {
+    const p3d = this.p3d;
+    const hw = CONFIG.gateHalfWidth * 1.5;
+    const zN = Math.max(0.1, zThreshold);
+    const zF = zThreshold + len;
+    if (zF <= 0.2) return;
+
+    p3d.beginWorld(ctx);
+    // asphalt
+    const nL = p3d.project(-hw, 0, zN), nR = p3d.project(hw, 0, zN);
+    const fL = p3d.project(-hw, 0, zF), fR = p3d.project(hw, 0, zF);
+    ctx.fillStyle = '#33373d';
     ctx.beginPath();
-    ctx.moveTo(nearL.sx, nearL.sy); ctx.lineTo(nearR.sx, nearR.sy);
-    ctx.lineTo(farR.sx, farR.sy); ctx.lineTo(farL.sx, farL.sy); ctx.closePath(); ctx.fill();
+    ctx.moveTo(nL.sx, nL.sy); ctx.lineTo(nR.sx, nR.sy);
+    ctx.lineTo(fR.sx, fR.sy); ctx.lineTo(fL.sx, fL.sy); ctx.closePath(); ctx.fill();
     // centreline dashes
-    ctx.strokeStyle = 'rgba(255,255,255,0.8)';
-    ctx.lineWidth = Math.max(1, 3 * nearL.scale);
-    ctx.setLineDash([12 * nearL.scale, 14 * nearL.scale]);
-    ctx.beginPath();
-    const c0 = this.p3d.project(0, 0, Math.max(0.1, zNear));
-    const c1 = this.p3d.project(0, 0, zNear + len);
-    ctx.moveTo(c0.sx, c0.sy); ctx.lineTo(c1.sx, c1.sy); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.lineWidth = Math.max(1, 3 * nL.scale);
+    ctx.setLineDash([14 * nL.scale, 16 * nL.scale]);
+    const c0 = p3d.project(0, 0, zN), c1 = p3d.project(0, 0, zF);
+    ctx.beginPath(); ctx.moveTo(c0.sx, c0.sy); ctx.lineTo(c1.sx, c1.sy); ctx.stroke();
     ctx.setLineDash([]);
-    this.p3d.endWorld(ctx);
+    // threshold "piano key" markings
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    for (let k = -3; k <= 3; k++) {
+      const b = p3d.project(k * hw / 4, 0, zN + 10);
+      const w = Math.max(1, 3 * b.scale), h = Math.max(2, 16 * b.scale);
+      ctx.fillRect(b.sx - w / 2, b.sy - h, w, h);
+    }
+    p3d.endWorld(ctx);
+
+    // lights
+    p3d.beginWorld(ctx);
+    for (let z = zN; z <= zF; z += 46) { this._light(ctx, -hw, z, '#ffffff'); this._light(ctx, hw, z, '#ffffff'); }
+    for (let k = -2; k <= 2; k++) { this._light(ctx, k * hw / 2, zN, '#39ff88'); this._light(ctx, k * hw / 2, zF, '#ff5a5a'); }
+    if (withApproach) {
+      const n = 7, gap = 34, seq = Math.floor(this.bob * 8) % n;
+      for (let i = 0; i < n; i++) {
+        const z = zN - (i + 1) * gap;
+        if (z <= 0.5) continue;
+        const on = i === (n - 1 - seq);              // "rabbit" runs toward the runway
+        this._light(ctx, 0, z, on ? '#ffffff' : '#6f86a0', on ? 1.5 : 0.8);
+      }
+    }
+    p3d.endWorld(ctx);
+  }
+
+  _light(ctx, x, z, color, r = 1) {
+    if (z <= 0.2) return;
+    const p = this.p3d.project(x, 1, z);
+    const rr = Math.max(1.2, r * 3.2 * p.scale);
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath(); ctx.arc(p.sx, p.sy, rr, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 0.22;                          // soft glow halo
+    ctx.beginPath(); ctx.arc(p.sx, p.sy, rr * 2.3, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
   }
 
   _hudInfo() {
